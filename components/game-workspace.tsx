@@ -29,7 +29,7 @@ import {
   X,
 } from 'lucide-react'
 type Game = { id: string; name: string; total_hours: number }
-type Player = { id: string; display_name: string }
+type Player = { id: string; display_name: string; role?: 'admin' | 'player' | 'pending' }
 type Tier = 'Tier 1' | 'Tier 2' | 'Tier 3'
 type Assignment = { id: string; game_id: string; player_id: string; hours_text: string; tier: Tier | null; created_at: string; assigned_at: string }
 type AdminFile = { id: string; game_id: string; player_id: string; tier: Tier | null; file_name: string; duration: string | null; upload_status: string | null; is_flagged: boolean }
@@ -201,7 +201,8 @@ function AdminPanel({ autoPenaltyEnabled, onToggleAutoPenalty }: { autoPenaltyEn
   const [isRemovingAssignment, setIsRemovingAssignment] = useState<string | null>(null)
   const [selectedFilePlayer, setSelectedFilePlayer] = useState<string | null>(null)
   const [copiedFileId, setCopiedFileId] = useState<string | null>(null)
-  const [activeAdminSection, setActiveAdminSection] = useState<'games' | 'players' | 'assignments' | 'reports'>('games')
+  const [activeAdminSection, setActiveAdminSection] = useState<'games' | 'players' | 'assignments' | 'reports' | 'roles'>('games')
+  const [roleSavingId, setRoleSavingId] = useState<string | null>(null)
   const [reportType, setReportType] = useState<'player' | 'full'>('player')
   const [tierRates, setTierRates] = useState<Record<Tier, string>>({ 'Tier 1': '', 'Tier 2': '', 'Tier 3': '' })
   const [paymentReport, setPaymentReport] = useState<{ player: Player; uploadedTotals: Record<Tier, number>; flaggedTotals: Record<Tier, number>; tierTotals: Record<Tier, number>; totalUploadedHours: number; totalFlaggedHours: number; totalHours: number; totalPay: number }[]>([])
@@ -330,6 +331,17 @@ function AdminPanel({ autoPenaltyEnabled, onToggleAutoPenalty }: { autoPenaltyEn
     }
   }
 
+  async function updatePlayerRole(player: Player, role: 'admin' | 'player' | 'pending') {
+    setRoleSavingId(player.id)
+    const { data, error } = await createClient().rpc('set_profile_role', { target_profile_id: player.id, next_role: role })
+    if (error) setNotice(error.message.includes('Only administrators') ? 'Only administrators can change roles.' : 'Unable to update this account role.')
+    else {
+      setPlayers((current) => current.map((item) => item.id === player.id ? { ...item, role: data?.role ?? role } : item))
+      setNotice(`${player.display_name} is now ${role}.`)
+    }
+    setRoleSavingId(null)
+  }
+
   async function loadAssignments() {
     const supabase = createClient()
     const { data, error } = await supabase.from('player_hours').select('id, game_id, player_id, hours_text, tier, created_at, assigned_at').order('created_at', { ascending: false })
@@ -343,7 +355,7 @@ function AdminPanel({ autoPenaltyEnabled, onToggleAutoPenalty }: { autoPenaltyEn
       const supabase = createClient()
       const [{ data: gameData, error: gameError }, { data: playerData, error: playerError }, { data: fileData, error: fileError }, { data: penaltyData, error: penaltyError }] = await Promise.all([
         supabase.from('games').select('id, name, total_hours').order('created_at', { ascending: false }),
-        supabase.from('profiles').select('id, display_name').eq('role', 'player').order('display_name'),
+        supabase.from('profiles').select('id, display_name, role').in('role', ['admin', 'player', 'pending']).order('display_name'),
         supabase.from('file_updates').select('id, game_id, player_id, tier, file_name, duration, upload_status, is_flagged'),
         supabase.from('penalties').select('id, player_id, file_update_id, reason, source, created_at').order('created_at', { ascending: false }),
       ])
@@ -473,6 +485,7 @@ function AdminPanel({ autoPenaltyEnabled, onToggleAutoPenalty }: { autoPenaltyEn
     setNotice('Player hours assigned successfully.')
   }
 
+  const eligiblePlayers = players.filter((player) => player.role === 'player')
   const gameNames = useMemo(() => new Map(games.map((game) => [game.id, game.name])), [games])
   const playerNames = useMemo(() => new Map(players.map((player) => [player.id, player.display_name])), [players])
   const matchingPlayers = players.filter((player) => player.display_name.toLowerCase().includes(playerSearch.trim().toLowerCase()))
@@ -929,12 +942,13 @@ function AdminPanel({ autoPenaltyEnabled, onToggleAutoPenalty }: { autoPenaltyEn
         <p className="max-w-2xl text-base leading-7 text-muted-foreground">Set up game workstreams, assign players, and keep hourly expectations visible in one place.</p>
       </div>
 
-      <nav aria-label="Admin sections" className="grid gap-1.5 rounded-2xl border border-border bg-card p-1.5 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
+      <nav aria-label="Admin sections" className="grid gap-1.5 rounded-2xl border border-border bg-card p-1.5 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
         {[
           { id: 'games' as const, label: 'Game list', description: 'Create and manage games', icon: Gamepad2 },
           { id: 'players' as const, label: 'Manage players', description: 'Review player records', icon: Users },
           { id: 'assignments' as const, label: 'Games and assignments', description: 'Review assigned hours', icon: Clock3 },
           { id: 'reports' as const, label: 'Report', description: 'Generate working reports', icon: FileBarChart },
+          { id: 'roles' as const, label: 'Roles', description: 'Approve account access', icon: ShieldCheck },
         ].map(({ id, label, description, icon: Icon }) => {
           const isActive = activeAdminSection === id
           return (
@@ -951,6 +965,14 @@ function AdminPanel({ autoPenaltyEnabled, onToggleAutoPenalty }: { autoPenaltyEn
           )
         })}
       </nav>
+
+      {activeAdminSection === 'roles' && (
+        <section className="flex flex-col gap-6 rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-7">
+          <div className="flex flex-col gap-1"><p className="font-mono text-xs uppercase tracking-[0.18em] text-primary">Access control</p><h2 className="text-xl font-semibold tracking-tight">Manage account roles</h2><p className="text-sm leading-6 text-muted-foreground">New accounts start as Pending. Approve them as Players, or grant Admin access only when required.</p></div>
+          <div className="overflow-x-auto rounded-xl border border-border"><table className="w-full min-w-[680px] text-left text-sm"><thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground"><tr><th className="px-4 py-3">Account</th><th className="px-4 py-3">Current role</th><th className="px-4 py-3">Set role</th></tr></thead><tbody className="divide-y divide-border">{players.map((player) => <tr key={player.id}><td className="px-4 py-3"><span className="block font-semibold">{player.display_name}</span><span className="font-mono text-xs text-muted-foreground">{player.id.slice(0, 8)}…</span></td><td className="px-4 py-3"><span className="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold capitalize">{player.role ?? 'pending'}</span></td><td className="px-4 py-3"><select aria-label={`Set role for ${player.display_name}`} disabled={roleSavingId === player.id || player.role === 'admin'} value={player.role ?? 'pending'} onChange={(event) => void updatePlayerRole(player, event.target.value as 'admin' | 'player' | 'pending')} className="h-9 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-primary"><option value="pending">Pending</option><option value="player">Player</option><option value="admin">Admin</option></select>{player.role === 'admin' && <span className="ml-2 text-xs text-muted-foreground">Admin roles are protected</span>}</td></tr>)}</tbody></table></div>
+          {players.length === 0 && <EmptyState icon={Users} title="No accounts found" description="Signed-up accounts will appear here for approval." />}
+        </section>
+      )}
 
       {activeAdminSection === 'reports' && (
         <section className="flex flex-col gap-6 rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-7">
@@ -1013,7 +1035,7 @@ function AdminPanel({ autoPenaltyEnabled, onToggleAutoPenalty }: { autoPenaltyEn
               <div className="relative"><select required name="game" defaultValue="" className="h-11 w-full appearance-none rounded-xl border border-input bg-background px-3.5 pr-10 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"><option value="" disabled>{isLoading ? 'Loading games…' : 'Select a game'}</option>{games.map((game) => <option key={game.id} value={game.id}>{game.name}</option>)}</select><ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-3.5 size-4 text-muted-foreground" /></div>
             </Field>
             <Field label="Player">
-              <div className="relative"><select required name="player" defaultValue="" className="h-11 w-full appearance-none rounded-xl border border-input bg-background px-3.5 pr-10 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"><option value="" disabled>Select a player</option>{players.map((player) => <option key={player.id} value={player.id}>{player.display_name}</option>)}</select><ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-3.5 size-4 text-muted-foreground" /></div>
+              <div className="relative"><select required name="player" defaultValue="" className="h-11 w-full appearance-none rounded-xl border border-input bg-background px-3.5 pr-10 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"><option value="" disabled>Select a player</option>{eligiblePlayers.map((player) => <option key={player.id} value={player.id}>{player.display_name}</option>)}</select><ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-3.5 size-4 text-muted-foreground" /></div>
             </Field>
             <Field label="Hours for player"><input required name="hours" type="text" inputMode="decimal" placeholder="e.g. 12 hours" className="h-11 rounded-xl border border-input bg-background px-3.5 text-sm outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-ring/30" /></Field>
             <Field label="Tier">

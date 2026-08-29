@@ -59,7 +59,7 @@ export default function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
           setMessage(error.message.toLowerCase().includes('confirm') ? 'Please confirm your email before signing in.' : 'Invalid email or password.')
           return
         }
-        const { data: profile } = await supabase.from('profiles').select('role').single()
+        const { data: profile } = await supabase.from('profiles').select('role').eq('id', (await supabase.auth.getUser()).data.user?.id ?? '').maybeSingle()
         router.push(profile?.role === 'admin' ? '/admin' : '/player')
         router.refresh()
       }
